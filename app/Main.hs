@@ -10,6 +10,7 @@ import qualified Data.Map as M
 import Data.List
 import Data.Char (isSpace)
 import Parsing
+import Debug.Trace
 
 sgrCode :: [SGR] -> String
 sgrCode sgrs = setSGRCode sgrs
@@ -18,7 +19,10 @@ readEvalPrintLoop :: IO ()
 readEvalPrintLoop = do
    -- _         <- sgrExample
    initReadline
-   maybeLine <- readline (setSGRCode [SetColor Foreground Vivid Blue] ++ "+ " ++ (setSGRCode [Reset]))
+   -- all right : http://www.delorie.com/gnu/docs/readline/rlman_46.html
+   --             http://www.delorie.com/gnu/docs/readline/rlman_47.html
+   --             https://hackage.haskell.org/package/readline-1.0.3.0/docs/System-Console-Readline.html
+   maybeLine <- readline (setSGRCode [SetColor Foreground Vivid Blue] ++ "> " ++ (setSGRCode [Reset]))
    case maybeLine of
     Nothing     -> return () -- EOF / control-d
     Just "exit" -> return ()
@@ -30,6 +34,7 @@ readEvalPrintLoop = do
 initReadline :: IO ()
 initReadline = do
   setReadlineName "expenses" -- allow conditional parsing of the inputrc file
+  setCompletionAppendCharacter Nothing
   setAttemptedCompletionFunction $ Just addRecordCompletion
   -- setEventHook $ Just colorHook
 
@@ -53,32 +58,35 @@ split s = let
 
 
 
-addRecordCompletionAnalyzer :: String -> String -> Int -> Maybe CompletionType
-addRecordCompletionAnalyzer line text start =
-       if any (\x -> x <= start) (elemIndex '"' line)
-       then Nothing
-       else if  not $ null (filter (\x -> elem x ['0'..'9']) line)
-         then Nothing
-         else if null xs
-           then if head text == ':'
-             then Just CCommand
-             else Just CCategory
-           else Just CTag
-    where
-      xs = take start (trim line)
-      ys = split xs
+-- addRecordCompletionAnalyzer :: String -> String -> Int -> Maybe CompletionType
+-- addRecordCompletionAnalyzer line text start =
+--        if any (\x -> x <= start) (elemIndex '"' line)
+--        then Nothing
+--        else if  not $ null (filter (\x -> elem x ['0'..'9']) line)
+--          then Nothing
+--          else if null xs
+--            then if head text == ':'
+--              then Just CCommand
+--              else Just CCategory
+--            else Just CTag
+--     where
+--       xs = take start (trim line)
+--       ys = split xs
 
+
+-- good idea, I think I can write my own completion routine given readline functions
+-- or just don't use readline
 addRecordCompletion ::  String -> Int ->Int -> IO(Maybe (String, [String]))
 addRecordCompletion text start end = do
-      -- putStrLn $ "text: " ++ text
-      -- putStrLn $ "start: " ++ show start
-      -- putStrLn $ "end: " ++ show end
+      -- trace ("text: " ++ text ++
+      --         " \nstart: " ++ show start ++
+      --         "\nend: " ++ show end )
       setAttemptedCompletionOver True
       l <- getLineBuffer
-      pure $ case getCompletions (take end l) of
-        CmdPos s -> commandCompletion s
-        CatPos s -> categoryCompletion s
-        TagPos c s -> tagCompletion s
+      pure $ case getCompletions (take (end) l) of
+        CmdPos s -> commandCompletion  s
+        CatPos s -> categoryCompletion text s
+        TagPos c s -> tagCompletion s text
         otherwise -> Nothing  -- FIXME: RemovePos && company
 
 
@@ -95,14 +103,24 @@ addRecordCompletion text start end = do
                    -- default filename completer
                 -- rl_attempted_completion_over  disable default even if no matches
 
-categoryCompletion :: String -> Maybe (String, [String])
-categoryCompletion txt = fooMatches txt categories
+categoryCompletion ::  String -> String -> Maybe (String, [String])
+categoryCompletion s txt = fooMatches s txt categories
 
 commandCompletion :: String -> Maybe (String, [String])
 commandCompletion = commandsMatches
 
-tagCompletion :: String -> Maybe (String, [String])
-tagCompletion txt = fooMatches txt tags
+maybeHead :: [a] -> Maybe a
+maybeHead [] = Nothing
+maybeHead (x:xs) = Just x
+
+-- fuuuuck, rly?
+tagCompletion :: String -> String -> Maybe (String, [String])
+tagCompletion txt s =  if maybeHead s == Just '['
+                       then let
+                               f (z, zs) = ("[ " ++ z, zs)
+                            in f <$> fooMatches s txt tags
+
+                       else fooMatches s txt tags
 
 data Command = Command { name :: String
                        , action :: [String] -> IO ()
@@ -120,12 +138,21 @@ cmds =  [ Command "+" undefined ""
         ]
 
 categories = ["cat", "cat1", "cattiger", "catrine"]
-tags       = ["tag", "tagee", "sagee", "bagee", "tagree"]
+tags       = ["lag", "tag", "tagee", "sagee", "bagee", "tagree"]
 
-fooMatches :: String -> [String] -> Maybe (String, [String])
-fooMatches text options = if (null xs)
+mostCommonPrefix :: [String] -> String
+mostCommonPrefix xs = last $ takeWhile  (\p -> all (\x -> p `isPrefixOf` x) xs) ts
+  where
+    ts = inits (head xs)
+
+
+
+fooMatches :: String -> String -> [String] -> Maybe (String, [String])
+fooMatches s text options = if (null xs)
                           then Nothing
-                          else Just (head xs, xs)
+                          else if length options > 1
+                               then Just (mostCommonPrefix xs, xs) -- not s but most common prefix
+                               else Just (head xs, [])
   where
     xs = filter (isPrefixOf text) options
 commandsMatches :: String -> Maybe (String, [String])
