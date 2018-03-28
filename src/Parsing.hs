@@ -1,7 +1,12 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE TypeFamilies     #-}
 
-module Parsing() where
+module Parsing(
+  parseInput,
+  getCompletions,
+  UserRequest(..),
+  AddRequest(..),
+  CompletionRequest(..)) where
 
 import Data.Void
 import Control.Monad (void)
@@ -11,6 +16,7 @@ import Text.Megaparsec.Expr
 -- import Text.Megaparsec.String
 -- import Text.Megaparsec.Prim
 import qualified Text.Megaparsec.Char.Lexer as L
+import Control.Arrow(left)
 
 -- space -- skip
 
@@ -18,6 +24,27 @@ import qualified Text.Megaparsec.Char.Lexer as L
 -- space1 = void $ takeWhile1P (Just "white space") isSpace
 
 type Parser = Parsec Void String
+
+
+data UserRequest =
+         UserAdd AddRequest
+       | UserEmpty deriving Show
+
+data AddRequest = AddRequest String [String] Float (Maybe String) deriving (Show)
+
+data CompletionRequest =
+        CmdPos String
+      | CatPos String
+      | TagPos String String
+      | RemovePos String
+      | UndefinedPos deriving Show
+
+-- ok, simple add parser:
+-- '+'<main category' ws ('[' (sub_category *> ws) * ']')? ws <amount> ws ("comment")?
+-- or 'add' *> ws *> main_category *> ws ...
+-- or 'command'
+-- commands: +,-,add,rm, show, summary, next, prev, date, help ...
+-- ...
 
 sc :: Parser ()
 sc = space1
@@ -28,34 +55,9 @@ lexeme = L.lexeme sc
 rword :: String -> Parser ()
 rword w = lexeme (string w *> notFollowedBy alphaNumChar)
 
+
 symbol :: String -> Parser String
 symbol = L.symbol sc
-
-data UserInput = UserInput String String [String] Float (Maybe String) deriving (Show)
-data CompletionPos =
-      CategoryStart String
-    | CommandStart String
-    | TagOpen
-    | TagStart String
-    | AmountStart
-    | CommentStart
-    | EmptyCompletion deriving Show
-
-data InputPos =
-        CmdPos String
-      | CatPos String
-      | TagOpenPos
-      | TagPos String
-      | AmountPos
-      | CommentOpenPos
-      | EmptyPos deriving Show
-
--- ok, simple add parser:
--- '+'<main category' ws ('[' (sub_category *> ws) * ']')? ws <amount> ws ("comment")?
--- or 'add' *> ws *> main_category *> ws ...
--- or 'command'
--- commands: +,-,add,rm, show, summary, next, prev, date, help ...
--- ...
 
 cmd :: Parser String
 cmd =   (cmd' <|> cmd'')
@@ -64,25 +66,18 @@ cmd =   (cmd' <|> cmd'')
     cmd'' = (:"") <$> oneOf ['?', '+', '-']
 
 -- actually not space?
-cat :: Parser String
-cat = many (alphaNumChar <|> (oneOf "_-"))
-
-tagOpen :: Parser InputPos
-tagOpen = TagOpenPos <$ sc
 
 tag :: Parser String
 tag = many (alphaNumChar <|> (oneOf "_-"))
 
-tag' :: Parser String
-tag' = some (alphaNumChar <|> (oneOf "_-"))
+tag1 :: Parser String
+tag1 = some (alphaNumChar <|> (oneOf "_-"))
 
-amount :: Parser InputPos
-amount = CommentOpenPos <$ L.float
 
 -- floatP :: Parser Float
 
 
--- ignore :: Parser a -> Parser InputPos
+-- ignore :: Parser a -> Parser CompletionRequest
 -- ignore p = EmptyPos
 
 
@@ -94,7 +89,7 @@ amount = CommentOpenPos <$ L.float
 --                 then fail $ "keyword " ++ show x ++ " cannot be an identifier"
 --                 else return x
 
-infixl 4 ?>>, ??>>
+infixl 4 ?>>, ??>>, ?>>=
 
 (?>>) :: Parser a -> Parser a -> Parser a
 (?>>) a b = a >>= (\x -> b <|> (pure x))
@@ -106,51 +101,99 @@ infixl 4 ?>>, ??>>
              pure $ maybe x id y
   -- a >>= (\x -> b <|> (pure x))
 
+(?>>=) :: Parser a -> (a -> Parser (Maybe a)) -> Parser a
+(?>>=) a f = do
+              x <- a
+              y <- f x
+              pure $ maybe x id y
+
 
 commentP :: Parser String
 commentP =  (char '"' >> manyTill L.charLiteral (char '"'))
 
-completionParser :: Parser InputPos
-completionParser =
-  (CmdPos <$> cmd)
-  ?>> (sc *> (CatPos <$> cat))
-  ?>> (tagOpen)
-  ??>> maybeTags
-  ?>> (space *> amount)
-  ?>> (space *> (EmptyPos <$ commentP) <* space)
-  <* eof
-        where
-          tags = (TagPos <$> tag) ?>> ( tagEnd <|> (sc *> tags))
-          tagEnd = try (AmountPos <$ (space *> char ']'))
-          maybeTags =  optional (
-           ( (TagPos "" ) <$ char '[' <* space)
-            ?>> tags
-            )
+getCompletions :: String -> CompletionRequest
+getCompletions = maybe UndefinedPos id . (parseMaybe completionParser)
+
+parseInput :: String -> Either String UserRequest
+parseInput s = left parseErrorPretty (parse commandParser "" s)
+
+completionParser :: Parser CompletionRequest
+completionParser = space *> choice [
+      CmdPos "" <$ eof
+    , string "+" *> space *> addCompletions
+    , rword "add" *> addCompletions
+    , string "-" *> space *> removeCompletions
+    , rword "delete" *> removeCompletions
+    , rword "show" *> showCompletions
+    , rword "next" *> nextCompletions
+    , rword "prev" *> prevCompletions
+    , rword "date" *> dateCompletions
+    , rword "help" *> helpCompletions
+    ]
+
+addCompletions :: Parser CompletionRequest
+addCompletions =
+    CatPos <$> ( tag <* space )  ?>>= maybeTags <* space <* eof
+  where
+    tags c = (TagPos c <$> tag) ?>> ( tagEnd <|> (sc *> tags c))
+    tagEnd = UndefinedPos <$  char ']'
+    maybeTags (CatPos c) =  optional (
+     ( (TagPos c "" ) <$ char '[' <* space)
+      ?>> tags c -- TODO: think something smarter, esp. ?>>=
+      )
+
+
+removeCompletions :: Parser CompletionRequest
+removeCompletions = RemovePos <$> many digitChar <* space <* eof
+
+showCompletions :: Parser CompletionRequest
+showCompletions = pure UndefinedPos -- TODO:
+
+nextCompletions :: Parser CompletionRequest
+nextCompletions = pure UndefinedPos
+prevCompletions :: Parser CompletionRequest
+prevCompletions = pure UndefinedPos
+
+dateCompletions :: Parser CompletionRequest
+dateCompletions = pure UndefinedPos -- TODO: date!
+
+helpCompletions :: Parser CompletionRequest
+helpCompletions = pure UndefinedPos
+
 
 --------------------------------------------------
 
 
-
+commandParser :: Parser UserRequest
+commandParser = space *> choice [
+     UserEmpty <$ eof
+   , UserAdd <$> (string "+" *> space *> addParser)
+   , UserAdd <$> (rword "add" *> addParser)
+   , string "-" *> space *> undefined
+   , rword "delete" *> undefined
+   , rword "show" *> undefined
+   , rword "next" *> undefined
+   , rword "prev" *> undefined
+   , rword "date" *> undefined
+   , rword "help" *> undefined
+    ]
 
 -- not command, but +/add command parser ..
-commandParser :: Parser UserInput
-commandParser = do
-                c <- cmd -- not empty!!
-                space
-                category <- cat
-                space
+addParser :: Parser AddRequest
+addParser = do
+                category <- lexeme tag1
                 xs <- filter (not . null) <$> maybe [] id <$> optional (
                         char '[' *> space *>
                         (tag `sepBy` space1)
                         <* space <* char ']'
                       )
                 space
-                a <- L.float
+                a <- lexeme L.float
                 space
                 comments <- optional (commentP)
                 space
                 eof
-                pure $ UserInput c category  xs a comments
+                pure $ AddRequest category  xs a comments
 
 
 -- completionParser :: Parser CompletionPos

@@ -9,6 +9,7 @@ import Data.Map(Map(..))
 import qualified Data.Map as M
 import Data.List
 import Data.Char (isSpace)
+import Parsing
 
 sgrCode :: [SGR] -> String
 sgrCode sgrs = setSGRCode sgrs
@@ -25,10 +26,10 @@ readEvalPrintLoop = do
                     putStrLn $ "The user input: " ++ (show line)
                     readEvalPrintLoop
 
- 
+
 initReadline :: IO ()
 initReadline = do
-  setReadlineName "Fileman" -- allow conditional parsing of the inputrc file
+  setReadlineName "expenses" -- allow conditional parsing of the inputrc file
   setAttemptedCompletionFunction $ Just addRecordCompletion
   -- setEventHook $ Just colorHook
 
@@ -67,16 +68,30 @@ addRecordCompletionAnalyzer line text start =
       xs = take start (trim line)
       ys = split xs
 
-
 addRecordCompletion ::  String -> Int ->Int -> IO(Maybe (String, [String]))
 addRecordCompletion text start end = do
-                  setAttemptedCompletionOver True
-                  l <- getLineBuffer
-                  return $ case addRecordCompletionAnalyzer l text start of
-                    Just CCategory -> categoryCompletion text
-                    Just CCommand  -> commandCompletion text
-                    Just CTag      -> tagCompletion text
-                    otherwise      -> Nothing
+      -- putStrLn $ "text: " ++ text
+      -- putStrLn $ "start: " ++ show start
+      -- putStrLn $ "end: " ++ show end
+      setAttemptedCompletionOver True
+      l <- getLineBuffer
+      pure $ case getCompletions (take end l) of
+        CmdPos s -> commandCompletion s
+        CatPos s -> categoryCompletion s
+        TagPos c s -> tagCompletion s
+        otherwise -> Nothing  -- FIXME: RemovePos && company
+
+
+-- addRecordCompletion ::  String -> Int ->Int -> IO(Maybe (String, [String]))
+-- addRecordCompletion text start end = do
+--                   setAttemptedCompletionOver True
+--                   l <- getLineBuffer
+--                   return $ case addRecordCompletionAnalyzer l text start of
+--                     Just CCategory -> categoryCompletion text
+--                     Just CCommand  -> commandCompletion text
+--                     Just CTag      -> tagCompletion text
+--                     otherwise      -> Nothing
+
                    -- default filename completer
                 -- rl_attempted_completion_over  disable default even if no matches
 
@@ -93,13 +108,19 @@ data Command = Command { name :: String
                        , action :: [String] -> IO ()
                        , description :: String}
 
-cmds =  [ Command ":cd" undefined ""
-        , Command ":ls" undefined ""
-        , Command ":help" undefined ""
+cmds =  [ Command "+" undefined ""
+        , Command "add" undefined ""
+        , Command "-" undefined ""
+        , Command "delete" undefined ""
+        , Command "show" undefined ""
+        , Command "next" undefined ""
+        , Command "prev" undefined ""
+        , Command "date" undefined ""
+        , Command "help" undefined ""
         ]
 
-categories = ["foo", "bar", "baz", "foobaz"]
-tags       = ["tag", "tagee", "sagee", "bagee"]
+categories = ["cat", "cat1", "cattiger", "catrine"]
+tags       = ["tag", "tagee", "sagee", "bagee", "tagree"]
 
 fooMatches :: String -> [String] -> Maybe (String, [String])
 fooMatches text options = if (null xs)
