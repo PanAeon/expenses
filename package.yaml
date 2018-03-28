@@ -1,0 +1,58 @@
+name:                expenses
+version:             0.1.0.0
+github:              "panaeon/expenses"
+license:             BSD3
+author:              "vitalii voloshyn"
+maintainer:          "example@example.com"
+copyright:           "2018 vitalii voloshyn"
+
+extra-source-files:
+- README.md
+- ChangeLog.md
+
+# Metadata used when publishing your package
+# synopsis:            Short description of your package
+# category:            Web
+
+# To avoid duplicated efforts in documentation and dealing with the
+# complications of embedding Haddock markup inside cabal files, it is
+# common to point users to the README.md file.
+description:         Please see the README on Github at <https://github.com/panaeon/expenses#readme>
+
+dependencies:
+- base >= 4.7 && < 5
+- mtl
+- lens
+- containers
+- random
+- readline
+- ansi-terminal
+- sqlite-simple
+- aeson
+- megaparsec >= 6.5.0
+- Chart-diagrams
+
+library:
+  source-dirs: src
+
+executables:
+  expenses-exe:
+    main:                Main.hs
+    source-dirs:         app
+    ghc-options:
+    - -threaded
+    - -rtsopts
+    - -with-rtsopts=-N
+    dependencies:
+    - expenses
+
+tests:
+  expenses-test:
+    main:                Spec.hs
+    source-dirs:         test
+    ghc-options:
+    - -threaded
+    - -rtsopts
+    - -with-rtsopts=-N
+    dependencies:
+    - expenses
