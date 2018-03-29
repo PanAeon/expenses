@@ -2,6 +2,7 @@ module Main where
 
 import Lib
 
+-- good, move all this mess to Input or smth
 import System.Console.Readline
 import System.Console.ANSI
 import System.IO
@@ -11,6 +12,7 @@ import Data.List
 import Data.Char (isSpace)
 import Parsing
 import Debug.Trace
+
 
 sgrCode :: [SGR] -> String
 sgrCode sgrs = setSGRCode sgrs
@@ -34,7 +36,10 @@ readEvalPrintLoop = do
 initReadline :: IO ()
 initReadline = do
   setReadlineName "expenses" -- allow conditional parsing of the inputrc file
-  setCompletionAppendCharacter Nothing
+  -- setCompletionAppendCharacter Nothing
+  -- setCompletionEntryFunction ""
+  -- completeInternal
+
   setAttemptedCompletionFunction $ Just addRecordCompletion
   -- setEventHook $ Just colorHook
 
@@ -82,12 +87,22 @@ addRecordCompletion text start end = do
       --         " \nstart: " ++ show start ++
       --         "\nend: " ++ show end )
       setAttemptedCompletionOver True
+
       l <- getLineBuffer
-      pure $ case getCompletions (take (end) l) of
-        CmdPos s -> commandCompletion  s
-        CatPos s -> categoryCompletion text s
-        TagPos c s -> tagCompletion s text
-        otherwise -> Nothing  -- FIXME: RemovePos && company
+      let
+        wrap Nothing = pure Nothing
+        wrap (Just (x, [])) = pure (Just (x, []))
+        wrap (Just (x, xs)) = do
+                            b <- getLineBuffer
+                            displayMatchList xs
+                            setLineBuffer b
+                            forcedUpdateDisplay
+                            pure (Just (x, xs))
+      case getCompletions (take (end) l) of
+        CmdPos s -> wrap $ commandCompletion  s
+        CatPos s -> wrap $ categoryCompletion  s
+        TagPos c s -> wrap $ tagCompletion s
+        otherwise -> pure Nothing  -- FIXME: RemovePos && company
 
 
 -- addRecordCompletion ::  String -> Int ->Int -> IO(Maybe (String, [String]))
@@ -103,8 +118,8 @@ addRecordCompletion text start end = do
                    -- default filename completer
                 -- rl_attempted_completion_over  disable default even if no matches
 
-categoryCompletion ::  String -> String -> Maybe (String, [String])
-categoryCompletion s txt = fooMatches s txt categories
+categoryCompletion ::  String -> Maybe (String, [String])
+categoryCompletion txt = fooMatches txt categories
 
 commandCompletion :: String -> Maybe (String, [String])
 commandCompletion = commandsMatches
@@ -114,13 +129,13 @@ maybeHead [] = Nothing
 maybeHead (x:xs) = Just x
 
 -- fuuuuck, rly?
-tagCompletion :: String -> String -> Maybe (String, [String])
-tagCompletion txt s =  if maybeHead s == Just '['
+tagCompletion :: String -> Maybe (String, [String])
+tagCompletion s =  if maybeHead s == Just '['
                        then let
                                f (z, zs) = ("[ " ++ z, zs)
-                            in f <$> fooMatches s txt tags
+                            in f <$> fooMatches s tags
 
-                       else fooMatches s txt tags
+                       else fooMatches s  tags
 
 data Command = Command { name :: String
                        , action :: [String] -> IO ()
@@ -141,24 +156,35 @@ categories = ["cat", "cat1", "cattiger", "catrine"]
 tags       = ["lag", "tag", "tagee", "sagee", "bagee", "tagree"]
 
 mostCommonPrefix :: [String] -> String
+mostCommonPrefix [] = ""
 mostCommonPrefix xs = last $ takeWhile  (\p -> all (\x -> p `isPrefixOf` x) xs) ts
   where
     ts = inits (head xs)
 
 
+-- data Matches = Matches String [String]
 
-fooMatches :: String -> String -> [String] -> Maybe (String, [String])
-fooMatches s text options = if (null xs)
+-- findMatches :: String -> [String] ->
+
+
+-- FIXME: complete match -- don't show list suggestions if single or complete match
+-- no rl_completion_type in readline, strange, so double <tab> not possible?
+-- (of course could be done with custom state handler)
+fooMatches :: String -> [String] -> Maybe (String, [String])
+fooMatches text options = if (null xs)
                           then Nothing
-                          else if length options > 1
-                               then Just (mostCommonPrefix xs, xs) -- not s but most common prefix
+                          else if length xs > 1
+                               then
+                                     Just (mcp, xs) -- not s but most common prefix
                                else Just (head xs, [])
   where
     xs = filter (isPrefixOf text) options
+    mcp = mostCommonPrefix xs
+    foundExact = any (== mcp) xs
+
+
 commandsMatches :: String -> Maybe (String, [String])
-commandsMatches text = if (null xs)
-                       then Nothing
-                       else Just (text, xs)
+commandsMatches text = fooMatches text xs
    where
      xs = name <$>  filter (isPrefixOf text . name) cmds
 

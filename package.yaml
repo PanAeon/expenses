@@ -31,6 +31,7 @@ dependencies:
 - aeson
 - megaparsec >= 6.5.0
 - Chart-diagrams
+- sqlite-simple
 
 library:
   source-dirs: src

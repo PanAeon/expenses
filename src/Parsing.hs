@@ -1,6 +1,7 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE TypeFamilies     #-}
 
+
 module Parsing(
   parseInput,
   getCompletions,
@@ -65,6 +66,12 @@ cmd =   (cmd' <|> cmd'')
     cmd'  = many alphaNumChar
     cmd'' = (:"") <$> oneOf ['?', '+', '-']
 
+cmd' :: Parser String
+cmd' = many (notSpace)
+
+notSpace :: Parser Char
+notSpace = notChar ' '
+
 -- actually not space?
 
 tag :: Parser String
@@ -117,10 +124,11 @@ getCompletions = maybe UndefinedPos id . (parseMaybe completionParser)
 parseInput :: String -> Either String UserRequest
 parseInput s = left parseErrorPretty (parse commandParser "" s)
 
+-- show errors or not? probably not
 completionParser :: Parser CompletionRequest
 completionParser = space *> choice [
-      CmdPos "" <$ eof
-    , string "+" *> space *> addCompletions
+
+      try (string "+" *> sc) *> addCompletions
     , rword "add" *> addCompletions
     , string "-" *> space *> removeCompletions
     , rword "delete" *> removeCompletions
@@ -129,6 +137,7 @@ completionParser = space *> choice [
     , rword "prev" *> prevCompletions
     , rword "date" *> dateCompletions
     , rword "help" *> helpCompletions
+    , CmdPos <$> (cmd' <* eof)
     ]
 
 addCompletions :: Parser CompletionRequest
@@ -162,12 +171,13 @@ helpCompletions = pure UndefinedPos
 
 
 --------------------------------------------------
-
+--- still not very good, but I'm a bit fed up with all this cruft,
+-- as always promise myself to revisit sometime and clean-up this mess
 
 commandParser :: Parser UserRequest
 commandParser = space *> choice [
      UserEmpty <$ eof
-   , UserAdd <$> (string "+" *> space *> addParser)
+   , UserAdd <$> (string "+" *> space1 *> addParser)
    , UserAdd <$> (rword "add" *> addParser)
    , string "-" *> space *> undefined
    , rword "delete" *> undefined
