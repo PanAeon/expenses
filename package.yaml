@@ -32,6 +32,9 @@ dependencies:
 - megaparsec >= 6.5.0
 - Chart-diagrams
 - sqlite-simple
+- directory
+- text
+- hourglass
 
 library:
   source-dirs: src
