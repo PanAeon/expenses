@@ -31,10 +31,15 @@ dependencies:
 - aeson
 - megaparsec >= 6.5.0
 - Chart-diagrams
+- Chart
 - sqlite-simple
 - directory
 - text
 - hourglass
+- time
+- contravariant
+- temporary
+- process
 
 library:
   source-dirs: src

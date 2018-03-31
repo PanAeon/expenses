@@ -1,192 +1,200 @@
 module Main where
 
-import Lib
-
--- good, move all this mess to Input or smth
-import System.Console.Readline
-import System.Console.ANSI
-import System.IO
-import Data.Map(Map(..))
-import qualified Data.Map as M
-import Data.List
-import Data.Char (isSpace)
+import qualified DB as DB
+import  Model
+import qualified Data.List as L
+import Data.Map (Map)
+import qualified Data.Map as Map
+import Time.System(dateCurrent)
+import Time.Types(Date(..), DateTime(..))
+import Data.Hourglass(dateAddPeriod, periodDays)
+import Data.Set (Set)
+import qualified Data.Set as Set
+import Data.IORef
+import Interface
 import Parsing
-import Debug.Trace
+import Control.Monad(void, join)
+
+-- FIXME: show current date
+-- FIXME: put status of last operation on the left ?
+main :: IO ()
+main = do
+   c <- DB.initConnection
+   categoryCache <- newIORef (Nothing :: Maybe (Map CategoryName (Set Tag)))
+   _ <- DB.getCategories c categoryCache -- inits cache
+   (DateTime currentDate  _) <- dateCurrent
+   selectedDate <- newIORef currentDate
+   readEvalPrintLoop c categoryCache selectedDate
+-- init,date,cache, db
+-- run user interface
 
 
-sgrCode :: [SGR] -> String
-sgrCode sgrs = setSGRCode sgrs
-
-readEvalPrintLoop :: IO ()
-readEvalPrintLoop = do
-   -- _         <- sgrExample
-   initReadline
-   -- all right : http://www.delorie.com/gnu/docs/readline/rlman_46.html
-   --             http://www.delorie.com/gnu/docs/readline/rlman_47.html
-   --             https://hackage.haskell.org/package/readline-1.0.3.0/docs/System-Console-Readline.html
-   maybeLine <- readline (setSGRCode [SetColor Foreground Vivid Blue] ++ "> " ++ (setSGRCode [Reset]))
+-- well, readerT? ))
+readEvalPrintLoop :: DB.Connection -> IORef (Maybe (Map CategoryName (Set Tag))) ->
+                   IORef Date ->          IO ()
+readEvalPrintLoop conn categoryCache selectedDate = do
+   initReadline categoryCache
+   maybeLine <- askForInput
    case maybeLine of
     Nothing     -> return () -- EOF / control-d
     Just "exit" -> return ()
-    Just line -> do addHistory line
-                    putStrLn $ "The user input: " ++ (show line)
-                    readEvalPrintLoop
+    Just ":q"   -> return ()
+    Just line   -> do
+                     addHistory line
+                     putStrLn $ "The user input: " ++ (show line)
+                     -- parse and execute action ...
+                     case parseInput line of
+                       Left err -> putStrLn $ "Hmm: " ++ err
+                       Right EmptyRequest -> pure ()
+                       Right r@(AddRequest _ _ _ _) -> addRecord conn categoryCache selectedDate r
+                       Right (UpdateItem rownum) -> updateItem conn categoryCache selectedDate rownum
+                       Right (DeleteItem rownum) -> deleteRecord conn selectedDate rownum
+                       Right r@(AddCategory name) -> addCategory conn categoryCache name
+                       Right RefreshCache -> refreshCache conn categoryCache
+                       Right ShowSummary -> showSummary conn categoryCache selectedDate
+                       Right NextDate -> setNextDate selectedDate
+                       Right PrevDate -> setPrevDate selectedDate
+                       Right (SetDate day maybeMonth maybeYear) -> setDate selectedDate day maybeMonth maybeYear  -- FIXME: current
+                     readEvalPrintLoop conn categoryCache selectedDate
 
+addRecord :: DB.Connection
+       -> IORef (Maybe (Map CategoryName (Set Tag)))
+       -> IORef Date
+       -> UserRequest
+       -> IO ()
+addRecord c cacheRef selectedDate (AddRequest cat tags amount comments ) =
+  do
+    (Just categories) <- readIORef cacheRef
+    if Map.notMember (CategoryName cat) categories
+    then putStrLn $ "No such category '" ++ cat ++"'"
+    else do
+           d <- readIORef selectedDate
+           let tgs = (Set.fromList (Tag <$> tags))
+               cn  = (CategoryName cat)
+               r = Record Nothing cn tgs amount comments d
+           DB.insertRecord c r
+           DB.addTags c cacheRef cn tgs
+           -- insert tags
+deleteRecord :: DB.Connection -> IORef Date -> Int -> IO ()
+deleteRecord c selectedDate rownum =
+  do
+    d <- readIORef selectedDate
+    rs <- DB.getRecordsByDate c d
+    let _id (Record (Just x) _ _ _ _ _) = x
+        rs' = L.sortOn _id rs
+    if (length rs < (rownum + 1))
+    then putStrLn $ "No such rownum: " ++ show rownum
+    else do
+           let r = rs' !! rownum
+           DB.deleteRecord c (_id r)
+           putStrLn $ "Record #" ++ show rownum ++ " deleted"
 
-initReadline :: IO ()
-initReadline = do
-  setReadlineName "expenses" -- allow conditional parsing of the inputrc file
-  -- setCompletionAppendCharacter Nothing
-  -- setCompletionEntryFunction ""
-  -- completeInternal
+updateItem :: DB.Connection -> IORef (Maybe (Map CategoryName (Set Tag))) -> IORef Date -> Int -> IO ()
+updateItem c cacheRef selectedDate rownum =
+  do
+    d <- readIORef selectedDate
+    rs <- DB.getRecordsByDate c d
+    let _id (Record (Just x) _ _ _ _ _) = x
+        rs' = L.sortOn _id rs
+    if (length rs < (rownum + 1))
+    then putStrLn $ "No such rownum: " ++ show rownum
+    else do
+           let r = rs' !! rownum -- FIXME: update promput (u> orange .. ++ formatRecordPlain <- to hell with complete? (easy to add, in principle)
+           -- wait for user input ..., parse finish
+           pure ()
+           -- put rownum on screen and (wait for input, but allow update only... hm)
+           -- wait ...
+           -- readEvalPrintLoop c cacheRef selectedDate
+           -- putStrLn $ "Record #" ++ show rownum ++ " deleted"
 
-  setAttemptedCompletionFunction $ Just addRecordCompletion
-  -- setEventHook $ Just colorHook
+refreshCache :: DB.Connection -> IORef (Maybe (Map CategoryName (Set Tag))) -> IO ()
+refreshCache c cache = void $ DB.doGetCategories c cache
 
+addCategory :: DB.Connection
+       -> IORef (Maybe (Map CategoryName (Set Tag)))
+       -> String
+       -> IO ()
 
-bl = (setSGRCode [SetColor Foreground Vivid Blue])
-blend = (setSGRCode [Reset])
+addCategory c cacheRef name =
+    do
+      (Just m) <- readIORef cacheRef
+      if (Map.member (CategoryName name ) m)
+      then pure ()
+      else DB.upsertCategory c cacheRef (Category name Set.empty)
 
-data CompletionType = CCategory | CTag | CCommand
+showSummary :: DB.Connection
+         -> IORef (Maybe (Map CategoryName (Set Tag)))
+         -> IORef Date
+         -> IO ()
 
-trim :: String -> String -- FIXME: very inefficient, use Data.Text ?
-trim = f . f
-   where f = reverse . dropWhile isSpace
+setNextDate :: IORef Date -> IO ()
+setNextDate curr = modifyIORef curr (\d -> d `dateAddPeriod` mempty { periodDays = 1})
 
+setPrevDate :: IORef Date -> IO ()
+setPrevDate curr = modifyIORef curr (\d ->  d `dateAddPeriod` mempty { periodDays = -1})
 
-split :: String -> [String] -- FIXME: also not very efficient, wrong when first letter is space
-split [] = []
-split s = let
-            (h, rest) = span (not . isSpace) s
-            rst' = if null rest then rest else tail rest
-          in h : (split rst')
-
-
-
--- addRecordCompletionAnalyzer :: String -> String -> Int -> Maybe CompletionType
--- addRecordCompletionAnalyzer line text start =
---        if any (\x -> x <= start) (elemIndex '"' line)
---        then Nothing
---        else if  not $ null (filter (\x -> elem x ['0'..'9']) line)
---          then Nothing
---          else if null xs
---            then if head text == ':'
---              then Just CCommand
---              else Just CCategory
---            else Just CTag
---     where
---       xs = take start (trim line)
---       ys = split xs
-
-
--- good idea, I think I can write my own completion routine given readline functions
--- or just don't use readline
-addRecordCompletion ::  String -> Int ->Int -> IO(Maybe (String, [String]))
-addRecordCompletion text start end = do
-      -- trace ("text: " ++ text ++
-      --         " \nstart: " ++ show start ++
-      --         "\nend: " ++ show end )
-      setAttemptedCompletionOver True
-
-      l <- getLineBuffer
-      let
-        wrap Nothing = pure Nothing
-        wrap (Just (x, [])) = pure (Just (x, []))
-        wrap (Just (x, xs)) = do
-                            b <- getLineBuffer
-                            displayMatchList xs
-                            setLineBuffer b
-                            forcedUpdateDisplay
-                            pure (Just (x, xs))
-      case getCompletions (take (end) l) of
-        CmdPos s -> wrap $ commandCompletion  s
-        CatPos s -> wrap $ categoryCompletion  s
-        TagPos c s -> wrap $ tagCompletion s
-        otherwise -> pure Nothing  -- FIXME: RemovePos && company
-
-
--- addRecordCompletion ::  String -> Int ->Int -> IO(Maybe (String, [String]))
--- addRecordCompletion text start end = do
---                   setAttemptedCompletionOver True
---                   l <- getLineBuffer
---                   return $ case addRecordCompletionAnalyzer l text start of
---                     Just CCategory -> categoryCompletion text
---                     Just CCommand  -> commandCompletion text
---                     Just CTag      -> tagCompletion text
---                     otherwise      -> Nothing
-
-                   -- default filename completer
-                -- rl_attempted_completion_over  disable default even if no matches
-
-categoryCompletion ::  String -> Maybe (String, [String])
-categoryCompletion txt = fooMatches txt categories
-
-commandCompletion :: String -> Maybe (String, [String])
-commandCompletion = commandsMatches
-
-maybeHead :: [a] -> Maybe a
-maybeHead [] = Nothing
-maybeHead (x:xs) = Just x
-
--- fuuuuck, rly?
-tagCompletion :: String -> Maybe (String, [String])
-tagCompletion s =  if maybeHead s == Just '['
-                       then let
-                               f (z, zs) = ("[ " ++ z, zs)
-                            in f <$> fooMatches s tags
-
-                       else fooMatches s  tags
-
-data Command = Command { name :: String
-                       , action :: [String] -> IO ()
-                       , description :: String}
-
-cmds =  [ Command "+" undefined ""
-        , Command "add" undefined ""
-        , Command "-" undefined ""
-        , Command "delete" undefined ""
-        , Command "show" undefined ""
-        , Command "next" undefined ""
-        , Command "prev" undefined ""
-        , Command "date" undefined ""
-        , Command "help" undefined ""
-        ]
-
-categories = ["cat", "cat1", "cattiger", "catrine"]
-tags       = ["lag", "tag", "tagee", "sagee", "bagee", "tagree"]
-
-mostCommonPrefix :: [String] -> String
-mostCommonPrefix [] = ""
-mostCommonPrefix xs = last $ takeWhile  (\p -> all (\x -> p `isPrefixOf` x) xs) ts
-  where
-    ts = inits (head xs)
-
-
--- data Matches = Matches String [String]
-
--- findMatches :: String -> [String] ->
-
-
--- FIXME: complete match -- don't show list suggestions if single or complete match
--- no rl_completion_type in readline, strange, so double <tab> not possible?
--- (of course could be done with custom state handler)
-fooMatches :: String -> [String] -> Maybe (String, [String])
-fooMatches text options = if (null xs)
-                          then Nothing
-                          else if length xs > 1
-                               then
-                                     Just (mcp, xs) -- not s but most common prefix
-                               else Just (head xs, [])
-  where
-    xs = filter (isPrefixOf text) options
-    mcp = mostCommonPrefix xs
-    foundExact = any (== mcp) xs
-
-
-commandsMatches :: String -> Maybe (String, [String])
-commandsMatches text = fooMatches text xs
+setDate :: IORef Date -> Int -> Maybe Int -> Maybe Int ->  IO ()
+setDate ioRef day (Just month) (Just year)  = writeIORef ioRef date
    where
-     xs = name <$>  filter (isPrefixOf text . name) cmds
+     date = Date { dateDay = day, dateMonth = toEnum (month - 1), dateYear = year}
 
-main :: IO ()
-main = readEvalPrintLoop
+
+-- assuming terminal width 120
+terminalWidth = 120
+
+showSummary conn categoryCache selectedDate =
+  do
+    d <- readIORef selectedDate
+    rs <- DB.getRecordsByDate conn d
+    let _id (Record (Just x) _ _ _ _ _) = x
+        _amount (Record _ _ _ x _ _) = x
+        rs' = L.sortOn _id rs
+        rs'' = L.zip [0..] rs'
+        total = foldl (+) 0.0 (_amount <$> rs')
+    putStrLn $ L.replicate terminalWidth '*'
+    putStrLn ""
+    let
+       a = "    Date:  " ++ showDate d
+       o = 60 - length a
+    putStrLn $ a ++ (L.replicate o ' ') ++ " Total: " ++ (show total)
+
+    putStrLn ""
+    putStrLn $ "  Rownum  Category     TAGS                   AMOUNT  COMMENT"
+    sequence_ (printRecordSummary <$> rs'') -- TODO: beautiful border, color
+    putStrLn $ (L.replicate (max 0 (5 - length rs)) '\n') -- would be 5 minimum length
+    putStrLn ""
+    putStrLn $ L.replicate terminalWidth '*'
+    putStrLn ""
+
+    pure ()
+
+-- FIXME: print tags (only 5)
+-- FIXME: color, borders !
+printRecordSummary :: (Int, Record) -> IO ()
+printRecordSummary (rownum, (Record (Just id_) (CategoryName cat) tags amount comm ts)) =
+  do
+    let
+        id' = (show rownum)
+        cat' = cat
+        tags' = ""
+        amount' = show amount
+        comments' = maybe "" id comm
+        offset n xs = L.replicate (max 0 (n - length xs)) ' '
+    putStrLn $ "  " ++ id' ++ (offset 8 id')
+                    ++ cat ++ (offset 12 cat)
+                    ++ (offset 24 "" )
+                    ++ amount' ++ (offset 8 amount')
+                    ++ comments'
+
+showDate :: Date -> String
+showDate (Date y m d) = show d ++ " " ++ show m ++ " " ++ show y
+
+formatRecordPlain :: Record -> String
+formatRecordPlain (Record _ (CategoryName cat) tags amount comm ts) =
+   cat ++ " " ++ printTags ++ " " ++ (show amount) ++ " " ++ printComment
+   where
+     getTag (Tag x) = "x"
+     printTags = if length tags > 0
+                 then "[" ++ join ( L.intersperse " " (getTag <$> Set.toList tags) ) ++ "]"
+                 else ""
+     printComment = maybe "" (\x -> '"':x ++ "\"") comm

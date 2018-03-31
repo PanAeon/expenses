@@ -6,7 +6,6 @@ module Parsing(
   parseInput,
   getCompletions,
   UserRequest(..),
-  AddRequest(..),
   CompletionRequest(..)) where
 
 import Data.Void
@@ -28,16 +27,28 @@ type Parser = Parsec Void String
 
 
 data UserRequest =
-         UserAdd AddRequest
-       | UserEmpty deriving Show
+         AddRequest String [String] Float (Maybe String)
+       | DeleteItem Int
+       | UpdateItem Int
+       | RefreshCache
+       | AddCategory String
+       | RemoveCategory String
+       | NextDate
+       | PrevDate
+       | SetDate Int (Maybe Int) (Maybe Int) -- day month year
+       | ShowSummary
+       | ShowHelp
+       | EmptyRequest deriving Show
 
-data AddRequest = AddRequest String [String] Float (Maybe String) deriving (Show)
+
 
 data CompletionRequest =
         CmdPos String
       | CatPos String
       | TagPos String String
       | RemovePos String
+      | RefreshPos String
+
       | UndefinedPos deriving Show
 
 -- ok, simple add parser:
@@ -55,6 +66,9 @@ lexeme = L.lexeme sc
 
 rword :: String -> Parser ()
 rword w = lexeme (string w *> notFollowedBy alphaNumChar)
+
+token' :: String -> Parser String
+token' w = string w <* notFollowedBy alphaNumChar
 
 
 symbol :: String -> Parser String
@@ -81,6 +95,8 @@ tag1 :: Parser String
 tag1 = some (alphaNumChar <|> (oneOf "_-"))
 
 
+amount :: Parser Float
+amount = try (L.float) <|>  (fromIntegral <$> L.decimal)
 -- floatP :: Parser Float
 
 
@@ -131,29 +147,37 @@ completionParser = space *> choice [
       try (string "+" *> sc) *> addCompletions
     , rword "add" *> addCompletions
     , string "-" *> space *> removeCompletions
-    , rword "delete" *> removeCompletions
+    , rword "rm" *> removeCompletions
     , rword "show" *> showCompletions
     , rword "next" *> nextCompletions
     , rword "prev" *> prevCompletions
     , rword "date" *> dateCompletions
+    , rword "refresh" *> refreshCompletions
     , rword "help" *> helpCompletions
     , CmdPos <$> (cmd' <* eof)
     ]
 
+-- TODO: insert/rm category, tag
+-- fancy summary with diff/int, month-to-month stats
+
+
 addCompletions :: Parser CompletionRequest
 addCompletions =
-    CatPos <$> ( tag <* space )  ?>>= maybeTags <* space <* eof
+    CatPos <$> ( tag  )  ?>>= (maybeTags) <* space <* eof
   where
     tags c = (TagPos c <$> tag) ?>> ( tagEnd <|> (sc *> tags c))
     tagEnd = UndefinedPos <$  char ']'
-    maybeTags (CatPos c) =  optional (
-     ( (TagPos c "" ) <$ char '[' <* space)
+    maybeTags (CatPos c) =   optional (
+     ( (TagPos c "" ) <$ (space *> char '[' <* space))
       ?>> tags c -- TODO: think something smarter, esp. ?>>=
       )
 
 
 removeCompletions :: Parser CompletionRequest
 removeCompletions = RemovePos <$> many digitChar <* space <* eof
+
+refreshCompletions :: Parser CompletionRequest
+refreshCompletions = RefreshPos <$> (many digitChar <* space <* eof)
 
 showCompletions :: Parser CompletionRequest
 showCompletions = pure UndefinedPos -- TODO:
@@ -176,20 +200,25 @@ helpCompletions = pure UndefinedPos
 
 commandParser :: Parser UserRequest
 commandParser = space *> choice [
-     UserEmpty <$ eof
-   , UserAdd <$> (string "+" *> space1 *> addParser)
-   , UserAdd <$> (rword "add" *> addParser)
-   , string "-" *> space *> undefined
-   , rword "delete" *> undefined
-   , rword "show" *> undefined
-   , rword "next" *> undefined
-   , rword "prev" *> undefined
-   , rword "date" *> undefined
-   , rword "help" *> undefined
+     EmptyRequest <$ eof
+   , (string "+" *> space1 *> addParser)
+   , rword "add" *> addParser
+   , ShowSummary <$ (token' "ls" *> space *> eof)
+   , ShowSummary <$ (token' "summary" *> space *> eof)
+   , rword "-"  *> rmParser
+   , rword "rm" *> rmParser
+   , rword "update" *> updateParser
+   -- , rword "show" *> undefined
+   , NextDate <$ (token' "next" <* space <* eof)
+   , PrevDate <$ (token' "prev" <* space <* eof)
+   , rword "date" *> dateParser
+   , rword "category" *> categoryParser
+   , RefreshCache <$ (rword "refresh" *> token' "cache" *> space *> eof)
+   , ShowHelp <$ (token' "help" *> space *> eof)
     ]
 
 -- not command, but +/add command parser ..
-addParser :: Parser AddRequest
+addParser :: Parser UserRequest
 addParser = do
                 category <- lexeme tag1
                 xs <- filter (not . null) <$> maybe [] id <$> optional (
@@ -198,13 +227,38 @@ addParser = do
                         <* space <* char ']'
                       )
                 space
-                a <- lexeme L.float
+                a <-  L.float
                 space
                 comments <- optional (commentP)
                 space
                 eof
                 pure $ AddRequest category  xs a comments
 
+categoryParser :: Parser UserRequest
+categoryParser = do
+                  subCommand <- choice [ "add" <$ rword "add", "rm" <$ rword "rm"]
+                  name <- tag1
+                  case subCommand of
+                    "add" -> pure $ AddCategory name
+                    "rm" -> undefined
+
+rmParser :: Parser UserRequest
+rmParser = DeleteItem <$> (L.decimal <* space <* eof)
+
+updateParser:: Parser UserRequest
+updateParser = UpdateItem <$> (L.decimal <* space <* eof)
+
+dateParser :: Parser UserRequest -- FIXME: validation, partial date
+dateParser =
+  do
+    day <- L.decimal
+    string "."
+    month <- L.decimal
+    string "."
+    year <- L.decimal
+    space
+    eof
+    pure $ SetDate day (Just month) (Just year)
 
 -- completionParser :: Parser CompletionPos
 -- completionParser = commandCP *> categoryStartCP *> tagOpenCP *> tagStartCP *> amountStartCP *> commentCP
