@@ -37,9 +37,12 @@ data UserRequest =
        | PrevDate
        | SetDate Int (Maybe Int) (Maybe Int) -- day month year
        | ShowSummary
+       | ShowChart String -- current, next prev .. deal with current. FIXME: move parsing here, you're being lazy
        | ShowHelp
        | EmptyRequest deriving Show
 
+
+-- data ChartType = Month | Year | RelMonth | RelYear deriving Show -- TODO: optionally add relative charts, right now stick with months
 
 
 data CompletionRequest =
@@ -214,6 +217,7 @@ commandParser = space *> choice [
    , rword "date" *> dateParser
    , rword "category" *> categoryParser
    , RefreshCache <$ (rword "refresh" *> token' "cache" *> space *> eof)
+   , token' "chart" *> space *> chartParser
    , ShowHelp <$ (token' "help" *> space *> eof)
     ]
 
@@ -227,7 +231,7 @@ addParser = do
                         <* space <* char ']'
                       )
                 space
-                a <-  L.float
+                a <-  amount
                 space
                 comments <- optional (commentP)
                 space
@@ -259,6 +263,10 @@ dateParser =
     space
     eof
     pure $ SetDate day (Just month) (Just year)
+
+
+chartParser :: Parser UserRequest
+chartParser = (ShowChart "selected-month" <$ eof) -- FIXME: all other cases
 
 -- completionParser :: Parser CompletionPos
 -- completionParser = commandCP *> categoryStartCP *> tagOpenCP *> tagStartCP *> amountStartCP *> commentCP

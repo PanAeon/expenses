@@ -1,4 +1,4 @@
-module Charts () where
+module Charts (renderMonthSummary, openViewer) where
 
 import Graphics.Rendering.Chart.Easy
 import Graphics.Rendering.Chart.Backend.Diagrams(toFile)
@@ -26,6 +26,7 @@ pitem (s,v,o) = pitem_value .~ v
               $ pitem_offset .~ (if o then 25 else 0)
               $ def
 
+-- FIXME: make style more beautiful, with gradual color pallete, fonts, etc.
 renderMonthSummary :: [Record] -> IO FilePath
 renderMonthSummary records =
   do
@@ -40,4 +41,4 @@ renderMonthSummary records =
     g (a,b,c) = b
 
 openViewer :: FilePath -> IO ()
-openViewer path = void $ spawnCommand ("xdg-open " ++ show path) -- FIXME: bloody mac 
+openViewer path = void $ spawnCommand ("xdg-open " ++ show path) -- FIXME: bloody mac

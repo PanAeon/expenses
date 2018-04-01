@@ -7,16 +7,19 @@ import Data.Map (Map)
 import qualified Data.Map as Map
 import Time.System(dateCurrent)
 import Time.Types(Date(..), DateTime(..))
-import Data.Hourglass(dateAddPeriod, periodDays)
+import Data.Hourglass(dateAddPeriod, periodDays, periodMonths)
+import qualified Charts as Charts
 import Data.Set (Set)
 import qualified Data.Set as Set
 import Data.IORef
 import Interface
 import Parsing
 import Control.Monad(void, join)
+import Utils
 
 -- FIXME: show current date
--- FIXME: put status of last operation on the left ?
+-- FIXME: put status of last operation on the left, maybe bottom?
+--
 main :: IO ()
 main = do
    c <- DB.initConnection
@@ -55,6 +58,7 @@ readEvalPrintLoop conn categoryCache selectedDate = do
                        Right NextDate -> setNextDate selectedDate
                        Right PrevDate -> setPrevDate selectedDate
                        Right (SetDate day maybeMonth maybeYear) -> setDate selectedDate day maybeMonth maybeYear  -- FIXME: current
+                       Right (ShowChart _) -> showChart conn categoryCache selectedDate
                      readEvalPrintLoop conn categoryCache selectedDate
 
 addRecord :: DB.Connection
@@ -128,16 +132,39 @@ showSummary :: DB.Connection
          -> IO ()
 
 setNextDate :: IORef Date -> IO ()
-setNextDate curr = modifyIORef curr (\d -> d `dateAddPeriod` mempty { periodDays = 1})
+setNextDate curr = do
+                   modifyIORef curr (\d -> d `dateAddPeriod` mempty { periodDays = 1})
+                   date <- readIORef curr
+                   putStrLn $ "Date is set to " ++ showDate date
 
 setPrevDate :: IORef Date -> IO ()
-setPrevDate curr = modifyIORef curr (\d ->  d `dateAddPeriod` mempty { periodDays = -1})
-
+setPrevDate curr = do
+                   modifyIORef curr (\d ->  d `dateAddPeriod` mempty { periodDays = -1})
+                   date <- readIORef curr
+                   putStrLn $ "Date is set to " ++ showDate date
 setDate :: IORef Date -> Int -> Maybe Int -> Maybe Int ->  IO ()
-setDate ioRef day (Just month) (Just year)  = writeIORef ioRef date
+setDate ioRef day (Just month) (Just year)  = do
+                                              writeIORef ioRef date
+                                              putStrLn $ "Date is set to " ++ showDate date
    where
      date = Date { dateDay = day, dateMonth = toEnum (month - 1), dateYear = year}
 
+
+showChart
+      :: DB.Connection
+         -> IORef (Maybe (Map CategoryName (Set Tag)))
+         -> IORef Date
+         -> IO ()
+showChart conn cache selectedDate =
+         do
+            d <- readIORef selectedDate
+            let
+               monthStart = d { dateDay = 1 }
+               monthEnd   = monthStart `dateAddPeriod` mempty { periodMonths = 1}
+            rs <- DB.getRecordsByRange conn monthStart monthEnd
+            p  <- Charts.renderMonthSummary rs
+            putStrLn $ "opening viewer for " ++ show p
+            Charts.openViewer p
 
 -- assuming terminal width 120
 terminalWidth = 120
@@ -186,8 +213,6 @@ printRecordSummary (rownum, (Record (Just id_) (CategoryName cat) tags amount co
                     ++ amount' ++ (offset 8 amount')
                     ++ comments'
 
-showDate :: Date -> String
-showDate (Date y m d) = show d ++ " " ++ show m ++ " " ++ show y
 
 formatRecordPlain :: Record -> String
 formatRecordPlain (Record _ (CategoryName cat) tags amount comm ts) =
