@@ -32,6 +32,7 @@ dependencies:
 - megaparsec >= 6.5.0
 - Chart-diagrams
 - Chart
+- colour
 - sqlite-simple
 - directory
 - text
