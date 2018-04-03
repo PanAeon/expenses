@@ -20,6 +20,10 @@ import Data.Set(Set(..))
 import qualified Data.Set as Set
 import Data.Map(Map(..))
 import qualified Data.Map as Map
+
+
+
+
 sgrCode :: [SGR] -> String
 sgrCode sgrs = setSGRCode sgrs
 
@@ -58,22 +62,6 @@ split s = let
             rst' = if null rest then rest else tail rest
           in h : (split rst')
 
-
-
--- addRecordCompletionAnalyzer :: String -> String -> Int -> Maybe CompletionType
--- addRecordCompletionAnalyzer line text start =
---        if any (\x -> x <= start) (elemIndex '"' line)
---        then Nothing
---        else if  not $ null (filter (\x -> elem x ['0'..'9']) line)
---          then Nothing
---          else if null xs
---            then if head text == ':'
---              then Just CCommand
---              else Just CCategory
---            else Just CTag
---     where
---       xs = take start (trim line)
---       ys = split xs
 
 
 -- good idea, I think I can write my own completion routine given readline functions
